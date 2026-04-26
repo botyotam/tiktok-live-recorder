@@ -1,0 +1,12 @@
+{
+    "name": "TikTok Live Recorder Bot",
+    "build": {
+        "dockerfile": "Dockerfile",
+        "context": ".."
+    },
+    "settings": {},
+    "extensions": [
+        "ms-python.python"
+    ],
+    "postCreateCommand": "pip install --no-cache-dir -r requirements.txt && sudo apt-get update && sudo apt-get install -y ffmpeg"
+}
