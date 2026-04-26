@@ -29,7 +29,7 @@ def authorized_only(func):
 @authorized_only
 async def start_command(update: Update, context):
     await update.message.reply_text(
-        "Halo! Kirimkan username TikTok atau URL live TikTok untuk memulai perekaman."
+        "Halo! Saya adalah bot perekam live TikTok. Kirimkan username TikTok (misal: `@username`) atau URL live TikTok untuk memulai perekaman. \n\nPerintah yang tersedia:\n/record <username/URL> - Memulai perekaman\n/stop - Menghentikan rekaman aktif\n/status - Melihat status rekaman\n/save - Mengunggah rekaman ke Telegram dan menghapus file lokal"
     )
 
 @authorized_only

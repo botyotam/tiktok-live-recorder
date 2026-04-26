@@ -26,6 +26,7 @@ class TikTokRecorder:
             "yt-dlp",
             "--quiet", "--no-warnings",
             "--user-agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "--impersonate", "Chrome", # Menambahkan flag impersonate
             "--simulate", # Don't download
             f"https://www.tiktok.com/@{username}/live"
         ]
@@ -62,6 +63,7 @@ class TikTokRecorder:
             "yt-dlp",
             "--no-warnings",
             "--user-agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "--impersonate", "Chrome", # Menambahkan flag impersonate
             "--output", filename,
             "--hls-prefer-ffmpeg",
             "--hls-use-mpegts",
