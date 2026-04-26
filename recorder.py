@@ -22,12 +22,44 @@ class TikTokRecorder:
 
     async def is_live(self, username):
         """Check if a user is live before starting the actual recording."""
+        # Try different browser cookies if one fails
+        browsers = ["chrome", "chromium", "firefox", "edge"]
+        
+        for browser in browsers:
+            command = [
+                "yt-dlp",
+                "--quiet", "--no-warnings",
+                "--user-agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                "--cookies-from-browser", browser,
+                "--simulate",
+                f"https://www.tiktok.com/@{username}/live"
+            ]
+            try:
+                process = await asyncio.create_subprocess_exec(
+                    *command,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE
+                )
+                stdout, stderr = await process.communicate()
+                if process.returncode == 0:
+                    return True
+                
+                err_msg = stderr.decode().lower()
+                if "could not find" in err_msg and "cookies database" in err_msg:
+                    continue # Try next browser
+                
+                # If it's a TikTok specific error, we might want to return False
+                # but let's try other browsers just in case one has the session
+            except Exception as e:
+                logger.error(f"Error checking live status for {username} with {browser}: {e}")
+                continue
+        
+        # Fallback to no cookies if all browsers fail or are missing
         command = [
             "yt-dlp",
             "--quiet", "--no-warnings",
             "--user-agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-            "--cookies-from-browser", "chrome",
-            "--simulate", # Don't download
+            "--simulate",
             f"https://www.tiktok.com/@{username}/live"
         ]
         try:
@@ -38,8 +70,7 @@ class TikTokRecorder:
             )
             stdout, stderr = await process.communicate()
             return process.returncode == 0
-        except Exception as e:
-            logger.error(f"Error checking live status for {username}: {e}")
+        except:
             return False
 
     async def start_recording(self, chat_id, identifier):
@@ -59,11 +90,24 @@ class TikTokRecorder:
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         filename = os.path.join(RECORDINGS_DIR, f"tiktok_{username}_{timestamp}.mp4")
         
+        # Try to find a working browser for cookies
+        working_browser = "chrome" # Default
+        for browser in ["chrome", "chromium", "firefox", "edge"]:
+            test_cmd = ["yt-dlp", "--cookies-from-browser", browser, "--version"]
+            try:
+                p = await asyncio.create_subprocess_exec(*test_cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+                _, stderr = await p.communicate()
+                if "could not find" not in stderr.decode().lower():
+                    working_browser = browser
+                    break
+            except:
+                continue
+
         command = [
             "yt-dlp",
             "--no-warnings",
             "--user-agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-            "--cookies-from-browser", "chrome",
+            "--cookies-from-browser", working_browser,
             "--output", filename,
             "--hls-prefer-ffmpeg",
             "--hls-use-mpegts",
