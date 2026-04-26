@@ -24,10 +24,14 @@ Bot Telegram untuk merekam siaran langsung (live) TikTok secara otomatis menggun
    cd tiktok-live-recorder
    ```
 
-2. **Konfigurasi**:
-   Edit file `config.py` dan masukkan:
-   - `TELEGRAM_BOT_TOKEN`: Token dari @BotFather.
-   - `AUTHORIZED_USER_ID`: ID Telegram Anda (bisa didapat dari @userinfobot).
+2. **Konfigurasi Environment Variables (GitHub Secrets)**:
+   Bot ini membaca konfigurasi dari environment variables. Untuk keamanan, sangat disarankan untuk menggunakan GitHub Secrets jika Anda menjalankan bot di GitHub Codespaces atau GitHub Actions.
+
+   Tambahkan secrets berikut di repositori GitHub Anda (Settings -> Secrets and variables -> Actions -> New repository secret):
+   - `TELEGRAM_BOT_TOKEN`: Token bot Telegram Anda yang didapatkan dari @BotFather.
+   - `AUTHORIZED_USER_ID`: ID Telegram pengguna yang diizinkan untuk menggunakan bot. Anda bisa mendapatkan ID ini dari @userinfobot.
+
+   Jika Anda menjalankan secara lokal, Anda bisa mengatur environment variables ini di sistem Anda.
 
 3. **Jalankan di Codespaces**:
    - Buka repositori di GitHub.
