@@ -40,9 +40,15 @@ class TikTokRecorder:
 
             info = json.loads(stdout.decode())
             if info.get('is_live'):
-                # yt-dlp should provide the direct stream URL if live
-                # For TikTok, yt-dlp usually gives a direct HLS/DASH URL
-                return info.get('url'), None
+                # For TikTok, yt-dlp often provides the direct stream URL in the 'url' field
+                # or within the 'formats' list. We'll try to find a suitable one.
+                stream_url = info.get("url")
+                if not stream_url and info.get("formats"):
+                    for f in info["formats"]:
+                        if f.get("url") and f.get("protocol") in ["hls", "https"]:
+                            stream_url = f["url"]
+                            break
+                return stream_url, None
             else:
                 return None, "User is not live."
         except Exception as e:
