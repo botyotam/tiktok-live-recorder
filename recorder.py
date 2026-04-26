@@ -28,13 +28,16 @@ class TikTokRecorder:
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         filename = os.path.join(RECORDINGS_DIR, f"tiktok_{username}_{timestamp}.mp4")
         
-        # Simple and lightweight command using yt-dlp's native capability
-        # This avoids the complex ffmpeg pipe and uses yt-dlp's own downloader which is more stable for TikTok
+        # Using yt-dlp with specific flags for better stability and error reporting
+        # --part: Use .part files to see progress
+        # --no-part: Actually, for real-time monitoring, we might prefer direct writing or knowing where the part is.
+        # yt-dlp by default uses .part.
         command = [
             "yt-dlp",
-            "--quiet", "--no-warnings",
-            "--user-agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36",
+            "--no-warnings",
+            "--user-agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
             "--output", filename,
+            "--hls-prefer-ffmpeg", # Use ffmpeg for HLS which is often more robust for live streams
             f"https://www.tiktok.com/@{username}/live"
         ]
 
@@ -51,58 +54,93 @@ class TikTokRecorder:
                 'process': process,
                 'start_time': time.time(),
                 'status': 'recording',
-                'last_activity': time.time()
+                'last_activity': time.time(),
+                'error_detail': None
             }
             
             # Start monitoring in background
             asyncio.create_task(self._monitor_process(chat_id, process, filename))
             
-            return True, f"Recording started for @{username}. Please wait a few seconds for the file to be created."
+            return True, f"Recording started for @{username}. Use /status to check progress."
         except Exception as e:
             return False, f"Failed to start recording: {e}"
 
     async def _monitor_process(self, chat_id, process, filename):
         last_file_size = 0
         last_size_check_time = time.time()
+        part_filename = filename + ".part"
         
         try:
+            # We also want to capture stderr to provide better error messages
+            stderr_buffer = []
+
+            async def read_stderr():
+                while True:
+                    line = await process.stderr.readline()
+                    if not line:
+                        break
+                    decoded_line = line.decode().strip()
+                    if decoded_line:
+                        stderr_buffer.append(decoded_line)
+                        if len(stderr_buffer) > 20: # Keep last 20 lines
+                            stderr_buffer.pop(0)
+
+            stderr_task = asyncio.create_task(read_stderr())
+
             while process.returncode is None:
                 await asyncio.sleep(10) # Check every 10 seconds
                 
+                # Check both filename and part_filename
+                current_file = None
                 if os.path.exists(filename):
-                    current_size = os.path.getsize(filename)
+                    current_file = filename
+                elif os.path.exists(part_filename):
+                    current_file = part_filename
+                
+                if current_file:
+                    current_size = os.path.getsize(current_file)
                     if current_size > last_file_size:
                         last_file_size = current_size
                         last_size_check_time = time.time()
                     elif time.time() - last_size_check_time > FFMPEG_TIMEOUT:
-                        print(f"Recording for {chat_id} timed out.")
+                        print(f"Recording for {chat_id} timed out due to inactivity.")
                         process.terminate()
-                        self.active_recordings[chat_id]['status'] = 'timed_out'
+                        self.active_recordings[chat_id]['status'] = 'error'
+                        self.active_recordings[chat_id]['error_detail'] = "Inactivity timeout (Stream might have ended)"
                         break
                 elif time.time() - last_size_check_time > 60: # If file not created after 60s
-                    print(f"File not created for {chat_id}. Terminating.")
+                    print(f"File not created for {chat_id} after 60s.")
                     process.terminate()
                     self.active_recordings[chat_id]['status'] = 'error'
-                    self.active_recordings[chat_id]['error_msg'] = "File not created (User might not be live)"
+                    self.active_recordings[chat_id]['error_detail'] = "File not created (User might not be live or connection failed)"
                     break
 
-            stdout, stderr = await process.communicate()
-            if process.returncode != 0 and self.active_recordings[chat_id]['status'] == 'recording':
-                error_msg = stderr.decode().strip()
-                if "is not live" in error_msg.lower():
-                    self.active_recordings[chat_id]['status'] = 'error'
-                    self.active_recordings[chat_id]['error_msg'] = "User is not live."
-                else:
-                    self.active_recordings[chat_id]['status'] = 'error'
-                    self.active_recordings[chat_id]['error_msg'] = error_msg or f"Exit code {process.returncode}"
-            elif self.active_recordings[chat_id]['status'] == 'recording':
-                self.active_recordings[chat_id]['status'] = 'finished'
+            # Wait for process to finish
+            return_code = await process.wait()
+            await stderr_task
+
+            if chat_id in self.active_recordings:
+                info = self.active_recordings[chat_id]
                 
+                # If it was still "recording" but finished, check if it was successful
+                if info['status'] == 'recording':
+                    if return_code == 0:
+                        info['status'] = 'finished'
+                    else:
+                        info['status'] = 'error'
+                        # Use the last few lines of stderr as detail if not already set
+                        if not info['error_detail']:
+                            info['error_detail'] = "\n".join(stderr_buffer[-3:]) if stderr_buffer else f"Exit code {return_code}"
+                
+                # Handle case where yt-dlp finishes but leaves .part file
+                if os.path.exists(part_filename) and not os.path.exists(filename):
+                    os.rename(part_filename, filename)
+                    
         except Exception as e:
             print(f"Monitor error for {chat_id}: {e}")
             if chat_id in self.active_recordings:
                 self.active_recordings[chat_id]['status'] = 'error'
-                self.active_recordings[chat_id]['error_msg'] = str(e)
+                self.active_recordings[chat_id]['error_detail'] = str(e)
 
     async def stop_recording(self, chat_id):
         if chat_id not in self.active_recordings:
@@ -114,11 +152,18 @@ class TikTokRecorder:
                 record_info['process'].terminate()
                 await record_info['process'].wait()
                 record_info['status'] = 'stopped'
+                
+                # Final check for .part file
+                part_filename = record_info['filename'] + ".part"
+                if os.path.exists(part_filename) and not os.path.exists(record_info['filename']):
+                    os.rename(part_filename, record_info['filename'])
+                
                 return True, f"Stopped recording for @{record_info['username']}."
             except Exception as e:
                 return False, f"Error stopping: {e}"
         else:
             username = record_info['username']
+            # If already in error/finished state, just clear it
             self.clear_recording_info(chat_id)
             return True, f"Cleared status for @{username}."
 
@@ -128,12 +173,25 @@ class TikTokRecorder:
 
         info = self.active_recordings[chat_id]
         duration = int(time.time() - info['start_time'])
-        size = os.path.getsize(info['filename']) if os.path.exists(info['filename']) else 0
         
-        status = info['status'].replace('_', ' ').title()
-        msg = f"Status: {status}\nUsername: @{info['username']}\nDuration: {duration // 60}m {duration % 60}s\nSize: {size / (1024*1024):.2f} MB"
-        if 'error_msg' in info:
-            msg += f"\nError: {info['error_msg']}"
+        # Check size of either .mp4 or .mp4.part
+        filename = info['filename']
+        part_filename = filename + ".part"
+        size = 0
+        if os.path.exists(filename):
+            size = os.path.getsize(filename)
+        elif os.path.exists(part_filename):
+            size = os.path.getsize(part_filename)
+        
+        status_text = info['status'].replace('_', ' ').title()
+        msg = f"Status: {status_text}\n"
+        msg += f"Username: @{info['username']}\n"
+        msg += f"Duration: {duration // 3600:02d}:{(duration % 3600) // 60:02d}:{duration % 60:02d}\n"
+        msg += f"File Size: {size / (1024*1024):.2f} MB"
+        
+        if info.get('error_detail'):
+            msg += f"\nError Detail: {info['error_detail']}"
+        
         return msg
 
     def get_recording_file(self, chat_id):
@@ -146,5 +204,9 @@ class TikTokRecorder:
     def delete_recording_file(self, filename):
         if os.path.exists(filename):
             os.remove(filename)
+            return True
+        # Also check for .part
+        if os.path.exists(filename + ".part"):
+            os.remove(filename + ".part")
             return True
         return False
