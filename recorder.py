@@ -40,15 +40,33 @@ class TikTokRecorder:
 
             info = json.loads(stdout.decode())
             if info.get('is_live'):
-                # For TikTok, yt-dlp often provides the direct stream URL in the 'url' field
-                # or within the 'formats' list. We'll try to find a suitable one.
-                stream_url = info.get("url")
+                stream_url = None
+                # Prioritize direct URL if it's a good candidate (e.g., HLS/DASH)
+                if info.get("url") and ("m3u8" in info["url"] or "mpd" in info["url"]):
+                    stream_url = info["url"]
+                    print(f"DEBUG: yt-dlp direct URL (HLS/DASH) found: {stream_url}")
+                
+                # If not found, iterate through formats
                 if not stream_url and info.get("formats"):
+                    # Try to find HLS or DASH formats first
                     for f in info["formats"]:
-                        if f.get("url") and f.get("protocol") in ["hls", "https"]:
+                        if f.get("url") and f.get("protocol") in ["hls", "dash"]:
                             stream_url = f["url"]
+                            print(f"DEBUG: yt-dlp format (HLS/DASH) found: {stream_url}")
                             break
-                return stream_url, None
+                    # If still not found, try any https format
+                    if not stream_url:
+                        for f in info["formats"]:
+                            if f.get("url") and f.get("protocol") == "https":
+                                stream_url = f["url"]
+                                print(f"DEBUG: yt-dlp format (HTTPS) found: {stream_url}")
+                                break
+                
+                if stream_url:
+                    return stream_url, None
+                else:
+                    print(f"DEBUG: No suitable stream URL found in yt-dlp output for {username}. Full info: {info}")
+                    return None, "Could not find a suitable live stream URL.""
             else:
                 return None, "User is not live."
         except Exception as e:
