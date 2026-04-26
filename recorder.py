@@ -103,12 +103,10 @@ class TikTokRecorder:
         if chat_id in self.active_recordings and self.active_recordings[chat_id]['status'] == 'recording':
             return False, f"⚠️ Sudah ada rekaman aktif untuk @{self.active_recordings[chat_id]['username']}."
 
-        # Step 1: Check if live
-        live_status = await self.is_live(username)
-        if not live_status:
-            return False, f"❌ @{username} saat ini tidak sedang Live."
+        # Skip explicit live check because TikTok's API is currently blocking it.
+        # yt-dlp will automatically fail if the user is not live.
 
-        # Step 2: Start recording
+        # Step 1: Start recording
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         filename = os.path.join(RECORDINGS_DIR, f"tiktok_{username}_{timestamp}.mp4")
         
@@ -121,7 +119,8 @@ class TikTokRecorder:
             "--hls-prefer-ffmpeg",
             "--hls-use-mpegts",
             "--no-check-certificates",
-            "--concurrent-fragments", "5"
+            "--concurrent-fragments", "5",
+            "--wait-for-video", "60" # Wait up to 60s if live is just starting
         ]
 
         # Add cookie source
