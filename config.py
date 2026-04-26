@@ -1,4 +1,8 @@
 import os
+from dotenv import load_dotenv
+
+# Muat environment variables dari file .env jika ada
+load_dotenv()
 
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "YOUR_TELEGRAM_BOT_TOKEN_HERE")
 AUTHORIZED_USER_ID = int(os.getenv("AUTHORIZED_USER_ID", 123456789))  # Ganti dengan Telegram User ID Anda
