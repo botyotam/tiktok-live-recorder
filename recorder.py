@@ -20,22 +20,44 @@ class TikTokRecorder:
             return match.group(1)
         return identifier.lstrip('@')
 
+    async def is_live(self, username):
+        """Check if a user is live before starting the actual recording."""
+        command = [
+            "yt-dlp",
+            "--quiet", "--no-warnings",
+            "--user-agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "--simulate", # Don't download
+            f"https://www.tiktok.com/@{username}/live"
+        ]
+        try:
+            process = await asyncio.create_subprocess_exec(
+                *command,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE
+            )
+            stdout, stderr = await process.communicate()
+            return process.returncode == 0
+        except Exception as e:
+            logger.error(f"Error checking live status for {username}: {e}")
+            return False
+
     async def start_recording(self, chat_id, identifier):
         username = await self._get_tiktok_username(identifier)
         if not username:
-            return False, "Invalid TikTok username or URL."
+            return False, "❌ Username atau URL TikTok tidak valid."
 
         if chat_id in self.active_recordings and self.active_recordings[chat_id]['status'] == 'recording':
-            return False, f"Already recording for {self.active_recordings[chat_id]['username']}."
+            return False, f"⚠️ Sudah ada rekaman aktif untuk @{self.active_recordings[chat_id]['username']}."
 
+        # Step 1: Check if live
+        live_status = await self.is_live(username)
+        if not live_status:
+            return False, f"❌ @{username} saat ini tidak sedang Live."
+
+        # Step 2: Start recording
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         filename = os.path.join(RECORDINGS_DIR, f"tiktok_{username}_{timestamp}.mp4")
         
-        # Optimized yt-dlp flags for better compatibility
-        # --live-from-start: Try to get as much as possible
-        # --wait-for-video: Useful if they just started
-        # --no-check-certificates: Avoid SSL issues
-        # --hls-use-mpegts: Use mpegts for HLS which is very robust
         command = [
             "yt-dlp",
             "--no-warnings",
@@ -44,7 +66,7 @@ class TikTokRecorder:
             "--hls-prefer-ffmpeg",
             "--hls-use-mpegts",
             "--no-check-certificates",
-            "--concurrent-fragments", "5", # Faster downloading of segments
+            "--concurrent-fragments", "5",
             f"https://www.tiktok.com/@{username}/live"
         ]
 
@@ -68,9 +90,9 @@ class TikTokRecorder:
             # Start monitoring in background
             asyncio.create_task(self._monitor_process(chat_id, process, filename))
             
-            return True, f"Recording started for @{username}. Use /status to check progress."
+            return True, f"✅ Rekaman dimulai untuk @{username}!\nGunakan /status untuk melihat progres."
         except Exception as e:
-            return False, f"Failed to start recording: {e}"
+            return False, f"❌ Gagal memulai rekaman: {e}"
 
     async def _monitor_process(self, chat_id, process, filename):
         last_file_size = 0
@@ -118,7 +140,7 @@ class TikTokRecorder:
                             pass
                         if chat_id in self.active_recordings:
                             self.active_recordings[chat_id]['status'] = 'error'
-                            self.active_recordings[chat_id]['error_detail'] = "Inactivity timeout (Stream might have ended)"
+                            self.active_recordings[chat_id]['error_detail'] = "Timeout (Stream mungkin sudah berakhir)"
                         break
                 elif time.time() - last_size_check_time > 60:
                     logger.warning(f"File not created for {chat_id} after 60s.")
@@ -128,7 +150,7 @@ class TikTokRecorder:
                         pass
                     if chat_id in self.active_recordings:
                         self.active_recordings[chat_id]['status'] = 'error'
-                        self.active_recordings[chat_id]['error_detail'] = "File not created (User might not be live)"
+                        self.active_recordings[chat_id]['error_detail'] = "File tidak terbuat (User mungkin tidak Live)"
                     break
 
             return_code = await process.wait()
@@ -142,12 +164,11 @@ class TikTokRecorder:
                     else:
                         info['status'] = 'error'
                         if not info['error_detail']:
-                            # Look for common errors in stderr
                             error_text = "\n".join(stderr_buffer)
                             if "404 Not Found" in error_text:
-                                info['error_detail'] = "Stream URL expired (404). TikTok blocked the request or stream ended."
+                                info['error_detail'] = "URL Stream kedaluwarsa (404). TikTok memblokir atau stream berakhir."
                             elif "is not live" in error_text.lower():
-                                info['error_detail'] = "User is not live."
+                                info['error_detail'] = "User tidak sedang Live."
                             else:
                                 info['error_detail'] = "\n".join(stderr_buffer[-3:]) if stderr_buffer else f"Exit code {return_code}"
                 
@@ -165,7 +186,7 @@ class TikTokRecorder:
 
     async def stop_recording(self, chat_id):
         if chat_id not in self.active_recordings:
-            return False, "No active recording."
+            return False, "❌ Tidak ada rekaman aktif."
         
         record_info = self.active_recordings[chat_id]
         if record_info['status'] == 'recording':
@@ -192,18 +213,18 @@ class TikTokRecorder:
                     except:
                         pass
                 
-                return True, f"Stopped recording for @{record_info['username']}."
+                return True, f"✅ Rekaman untuk @{record_info['username']} telah dihentikan."
             except Exception as e:
                 logger.error(f"Error stopping recording for {chat_id}: {e}")
-                return False, f"Error stopping: {e}"
+                return False, f"❌ Gagal menghentikan: {e}"
         else:
             username = record_info['username']
             self.clear_recording_info(chat_id)
-            return True, f"Cleared status for @{username}."
+            return True, f"✅ Status untuk @{username} telah dibersihkan."
 
     async def get_recording_status(self, chat_id):
         if chat_id not in self.active_recordings:
-            return "No active recording."
+            return "❌ Tidak ada rekaman aktif."
 
         info = self.active_recordings[chat_id]
         duration = int(time.time() - info['start_time'])
@@ -217,13 +238,14 @@ class TikTokRecorder:
             size = os.path.getsize(part_filename)
         
         status_text = info['status'].replace('_', ' ').title()
-        msg = f"Status: {status_text}\n"
-        msg += f"Username: @{info['username']}\n"
-        msg += f"Duration: {duration // 3600:02d}:{(duration % 3600) // 60:02d}:{duration % 60:02d}\n"
-        msg += f"File Size: {size / (1024*1024):.2f} MB"
+        msg = f"📊 **Status Perekaman**\n\n"
+        msg += f"👤 Username: @{info['username']}\n"
+        msg += f"⏳ Status: {status_text}\n"
+        msg += f"⏱ Durasi: {duration // 3600:02d}:{(duration % 3600) // 60:02d}:{duration % 60:02d}\n"
+        msg += f"📦 Ukuran File: {size / (1024*1024):.2f} MB"
         
         if info.get('error_detail'):
-            msg += f"\nError Detail: {info['error_detail']}"
+            msg += f"\n\n❌ **Detail Error:**\n{info['error_detail']}"
         
         return msg
 

@@ -22,7 +22,6 @@ def authorized_only(func):
     async def wrapper(update: Update, context):
         if update.effective_user.id != AUTHORIZED_USER_ID:
             logger.info(f"Unauthorized access attempt from user ID: {update.effective_user.id}")
-            # Silent ignore
             return
         return await func(update, context)
     return wrapper
@@ -41,9 +40,14 @@ async def record_command(update: Update, context):
 
     identifier = context.args[0]
     chat_id = update.effective_chat.id
+    
+    # Send initial checking message
+    checking_msg = await update.message.reply_text(f"🔍 Sedang mengecek akun {identifier}...")
 
     success, message = await recorder.start_recording(chat_id, identifier)
-    await update.message.reply_text(message)
+    
+    # Edit the checking message with the result
+    await checking_msg.edit_text(message)
 
 @authorized_only
 async def stop_command(update: Update, context):
@@ -64,10 +68,15 @@ async def save_command(update: Update, context):
     file_path = recorder.get_recording_file(chat_id)
 
     if not file_path or not os.path.exists(file_path):
-        await update.message.reply_text("Tidak ada rekaman aktif atau file tidak ditemukan.")
-        return
+        # Check for .part file too
+        if file_path and os.path.exists(file_path + ".part"):
+            file_path = file_path + ".part"
+        else:
+            await update.message.reply_text("Tidak ada rekaman aktif atau file tidak ditemukan.")
+            return
 
     try:
+        await update.message.reply_text("Sedang mengunggah file ke Telegram, mohon tunggu...")
         await update.message.reply_document(document=open(file_path, 'rb'))
         await update.message.reply_text("File berhasil diunggah. Menghapus file lokal...")
         recorder.delete_recording_file(file_path)
@@ -84,8 +93,13 @@ async def handle_message(update: Update, context):
 
     # Check if it's a TikTok username or URL
     if re.match(r"^@?[a-zA-Z0-9._-]+" , text) or re.match(r"https?://(www.)?tiktok.com/.*", text):
+        # Send initial checking message
+        checking_msg = await update.message.reply_text(f"🔍 Sedang mengecek akun {text}...")
+        
         success, message = await recorder.start_recording(chat_id, text)
-        await update.message.reply_text(message)
+        
+        # Edit the checking message with the result
+        await checking_msg.edit_text(message)
     else:
         await update.message.reply_text("Saya hanya bisa memproses username TikTok atau URL live TikTok.")
 
