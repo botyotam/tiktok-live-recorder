@@ -92,13 +92,18 @@ class TikTokRecorder:
         filename = os.path.join(RECORDINGS_DIR, f"tiktok_{username}_{timestamp}.mp4")
 
         # ffmpeg command to record without re-encoding (codec copy)
+        # Added -reconnect flags for better stream stability
         command = [
             "ffmpeg",
+            "-reconnect", "1",
+            "-reconnect_streamed", "1",
+            "-reconnect_delay_max", "5",
             "-i", stream_url,
             "-c", "copy",
             "-map", "0",
             "-f", "mp4",
             "-movflags", "frag_keyframe+empty_moov", # Optimize for fragmented output
+            "-y", # Overwrite output files without asking
             filename
         ]
 
@@ -124,15 +129,34 @@ class TikTokRecorder:
     async def _monitor_ffmpeg_process(self, chat_id, process, filename):
         last_file_size = 0
         last_size_check_time = time.time()
+        error_log = []
         try:
+            # Read stderr in the background to capture errors
+            async def read_stderr():
+                while True:
+                    line = await process.stderr.readline()
+                    if not line:
+                        break
+                    decoded_line = line.decode().strip()
+                    if "error" in decoded_line.lower() or "failed" in decoded_line.lower():
+                        error_log.append(decoded_line)
+                    # Keep only last 10 error lines
+                    if len(error_log) > 10:
+                        error_log.pop(0)
+
+            stderr_task = asyncio.create_task(read_stderr())
+
             while process.returncode is None:
                 await asyncio.sleep(5)  # Check every 5 seconds
 
                 if not os.path.exists(filename):
-                    print(f"FFmpeg process for {chat_id}: Recording file {filename} not found. Terminating.")
-                    process.terminate()
-                    await process.wait()
-                    self.active_recordings[chat_id]['status'] = 'error'
+                    # Check if process is still alive
+                    if process.returncode is None:
+                        print(f"FFmpeg process for {chat_id}: Recording file {filename} not found. Terminating.")
+                        process.terminate()
+                        await process.wait()
+                        self.active_recordings[chat_id]['status'] = 'error'
+                        self.active_recordings[chat_id]['error_msg'] = "File not created"
                     break
 
                 current_file_size = os.path.getsize(filename)
@@ -147,53 +171,60 @@ class TikTokRecorder:
                     last_file_size = current_file_size
                     last_size_check_time = time.time()
 
-                # Also check for external timeout from config
-                if time.time() - self.active_recordings[chat_id]['start_time'] > FFMPEG_TIMEOUT * 2: # Give it more time than just inactivity
-                    print(f"FFmpeg process for {chat_id} exceeded total recording timeout. Killing.")
-                    process.terminate()
-                    await process.wait()
-                    self.active_recordings[chat_id]['status'] = 'timed_out'
-                    break
-
-            await process.wait()  # Ensure process is fully terminated
+            await process.wait()
+            stderr_task.cancel()
+            
             if process.returncode != 0 and self.active_recordings[chat_id]['status'] not in ['stopped', 'timed_out']:
                 print(f"FFmpeg process for {chat_id} exited with error: {process.returncode}")
                 self.active_recordings[chat_id]['status'] = 'error'
+                self.active_recordings[chat_id]['error_msg'] = "\n".join(error_log) if error_log else f"Exit code {process.returncode}"
             elif self.active_recordings[chat_id]['status'] == 'recording':
                 self.active_recordings[chat_id]['status'] = 'finished'
 
         except asyncio.CancelledError:
-            print(f"Monitoring for {chat_id} cancelled.")
-            if process.returncode is None: # If process is still running, terminate it
+            if process.returncode is None:
                 process.terminate()
                 await process.wait()
-            self.active_recordings[chat_id]['status'] = 'stopped' # Mark as stopped if cancelled
+            if chat_id in self.active_recordings:
+                self.active_recordings[chat_id]['status'] = 'stopped'
         except Exception as e:
             print(f"Error monitoring ffmpeg for {chat_id}: {e}")
-            self.active_recordings[chat_id]['status'] = 'error'
-            if process.returncode is None: # If process is still running, terminate it
+            if chat_id in self.active_recordings:
+                self.active_recordings[chat_id]['status'] = 'error'
+                self.active_recordings[chat_id]['error_msg'] = str(e)
+            if process.returncode is None:
                 process.terminate()
                 await process.wait()
 
     async def stop_recording(self, chat_id):
-        if chat_id not in self.active_recordings or self.active_recordings[chat_id]['status'] in ['stopped', 'finished']:
+        if chat_id not in self.active_recordings:
             return False, "No active recording to stop."
+        
+        # If it's already in an error or finished state, just clear it
+        if self.active_recordings[chat_id]['status'] in ['stopped', 'finished', 'error', 'timed_out']:
+            username = self.active_recordings[chat_id]['username']
+            filename = self.active_recordings[chat_id]['filename']
+            self.clear_recording_info(chat_id)
+            return True, f"Cleared inactive recording for @{username}. File: {os.path.basename(filename)}"
 
         record_info = self.active_recordings[chat_id]
         process = record_info['process']
         filename = record_info['filename']
 
         try:
-            process.terminate()  # Send SIGTERM to ffmpeg
-            try:
-                await asyncio.wait_for(process.wait(), timeout=5)  # Wait for it to terminate with a timeout
-            except asyncio.TimeoutError:
-                print(f"FFmpeg process for {chat_id} did not terminate gracefully. Killing.")
-                process.kill()  # Force kill if it doesn't terminate
-                await process.wait()
+            if process.returncode is None:
+                process.terminate()  # Send SIGTERM to ffmpeg
+                try:
+                    await asyncio.wait_for(process.wait(), timeout=5)
+                except asyncio.TimeoutError:
+                    print(f"FFmpeg process for {chat_id} did not terminate gracefully. Killing.")
+                    process.kill()
+                    await process.wait()
+            
             self.active_recordings[chat_id]['status'] = 'stopped'
             return True, f"Recording for @{record_info['username']} stopped. File: {os.path.basename(filename)}"
         except Exception as e:
+            print(f"Error stopping ffmpeg for {chat_id}: {e}")
             return False, f"Failed to stop ffmpeg: {e}"
         finally:
             self.clear_recording_info(chat_id)
@@ -211,8 +242,12 @@ class TikTokRecorder:
         duration = int(time.time() - start_time)
         file_size = os.path.getsize(filename) if os.path.exists(filename) else 0
 
+        status_text = f"Status: {status.replace('_', ' ').title()}\n"
+        if status == 'error' and 'error_msg' in record_info:
+            status_text += f"Error Detail: {record_info['error_msg']}\n"
+            
         return (
-            f"Status: {status.replace('_', ' ').title()}\n"
+            status_text +
             f"Username: @{username}\n"
             f"Duration: {duration // 3600:02d}:{(duration % 3600) // 60:02d}:{duration % 60:02d}\n"
             f"File Size: {file_size / (1024 * 1024):.2f} MB\n"

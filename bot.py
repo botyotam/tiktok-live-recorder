@@ -48,6 +48,7 @@ async def record_command(update: Update, context):
 @authorized_only
 async def stop_command(update: Update, context):
     chat_id = update.effective_chat.id
+    logger.info(f"Stop command received for chat_id: {chat_id}")
     success, message = await recorder.stop_recording(chat_id)
     await update.message.reply_text(message)
 
