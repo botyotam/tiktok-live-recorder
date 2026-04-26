@@ -31,13 +31,20 @@ class TikTokRecorder:
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         filename = os.path.join(RECORDINGS_DIR, f"tiktok_{username}_{timestamp}.mp4")
         
-        # Using yt-dlp with specific flags for better stability and error reporting
+        # Optimized yt-dlp flags for better compatibility
+        # --live-from-start: Try to get as much as possible
+        # --wait-for-video: Useful if they just started
+        # --no-check-certificates: Avoid SSL issues
+        # --hls-use-mpegts: Use mpegts for HLS which is very robust
         command = [
             "yt-dlp",
             "--no-warnings",
             "--user-agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
             "--output", filename,
             "--hls-prefer-ffmpeg",
+            "--hls-use-mpegts",
+            "--no-check-certificates",
+            "--concurrent-fragments", "5", # Faster downloading of segments
             f"https://www.tiktok.com/@{username}/live"
         ]
 
@@ -135,7 +142,14 @@ class TikTokRecorder:
                     else:
                         info['status'] = 'error'
                         if not info['error_detail']:
-                            info['error_detail'] = "\n".join(stderr_buffer[-3:]) if stderr_buffer else f"Exit code {return_code}"
+                            # Look for common errors in stderr
+                            error_text = "\n".join(stderr_buffer)
+                            if "404 Not Found" in error_text:
+                                info['error_detail'] = "Stream URL expired (404). TikTok blocked the request or stream ended."
+                            elif "is not live" in error_text.lower():
+                                info['error_detail'] = "User is not live."
+                            else:
+                                info['error_detail'] = "\n".join(stderr_buffer[-3:]) if stderr_buffer else f"Exit code {return_code}"
                 
                 if os.path.exists(part_filename) and not os.path.exists(filename):
                     try:
@@ -160,7 +174,6 @@ class TikTokRecorder:
                 logger.info(f"Terminating process for {chat_id}...")
                 process.terminate()
                 
-                # Wait with timeout to prevent hanging
                 try:
                     await asyncio.wait_for(process.wait(), timeout=5.0)
                     logger.info(f"Process for {chat_id} terminated gracefully.")
@@ -171,7 +184,6 @@ class TikTokRecorder:
                 
                 record_info['status'] = 'stopped'
                 
-                # Cleanup part file
                 filename = record_info['filename']
                 part_filename = filename + ".part"
                 if os.path.exists(part_filename) and not os.path.exists(filename):
