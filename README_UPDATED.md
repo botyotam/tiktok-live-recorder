@@ -36,3 +36,22 @@ To validate these fixes, please follow these steps:
 7.  **Observe Error Handling**: If a live stream goes offline during recording, observe how the bot handles it. The new monitoring should detect inactivity and terminate the recording gracefully.
 
 Your feedback on these changes will be crucial in confirming the effectiveness of the fixes.
+
+## Update: Second Round of Fixes (2026-04-27)
+
+Following further testing, additional issues were identified and addressed:
+
+1.  **Persistent 'Error' Status**: Even when some data was recorded (e.g., 0.09 MB), the bot would immediately switch to an 'Error' status. This was often due to `ffmpeg` exiting with a non-zero code because of stream instability or immediate disconnection.
+2.  **Failed `/stop` Command**: The `/stop` command would fail if the recording had already entered an 'Error' state but was still tracked in the `active_recordings` dictionary.
+
+### New Improvements
+
+1.  **FFmpeg Stability Flags**: Added `-reconnect`, `-reconnect_streamed`, and `-reconnect_delay_max` flags to the `ffmpeg` command. These allow `ffmpeg` to automatically attempt to reconnect if the stream is momentarily interrupted, which is common with TikTok Live.
+2.  **Detailed Error Reporting**: The bot now captures the last few lines of `ffmpeg`'s `stderr` output. If a recording fails, the `/status` command will now display the specific error message from `ffmpeg`, making it much easier to diagnose issues like "Connection refused" or "Invalid data".
+3.  **Improved Process Cleanup**:
+    *   The `/stop` command now handles recordings that are already in an 'Error' or 'Finished' state by clearing them from the system, allowing for a fresh start.
+    *   Added background monitoring of `ffmpeg`'s error output to capture issues in real-time.
+4.  **Robust `/status` Output**: The status message now includes an "Error Detail" section when a recording fails.
+
+### How to Debug Now
+If you see "Status: Error", run `/status` again. It should now show "Error Detail" with the actual message from `ffmpeg`. This will tell us if the problem is a network issue, a TikTok restriction, or something else.
