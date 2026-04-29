@@ -67,21 +67,35 @@ async def save_command(update: Update, context):
     chat_id = update.effective_chat.id
     file_path = recorder.get_recording_file(chat_id)
 
-    if not file_path or not os.path.exists(file_path):
-        # Check for .part file too
-        if file_path and os.path.exists(file_path + ".part"):
-            file_path = file_path + ".part"
-        else:
-            await update.message.reply_text("Tidak ada rekaman aktif atau file tidak ditemukan.")
-            return
+    if not file_path or (not os.path.exists(file_path) and not os.path.exists(file_path + ".part")):
+        await update.message.reply_text("Tidak ada rekaman aktif atau file tidak ditemukan.")
+        return
+
+    # Prioritize completed file, otherwise use part file
+    if not os.path.exists(file_path) and os.path.exists(file_path + ".part"):
+        file_path = file_path + ".part"
 
     try:
+        file_size = os.path.getsize(file_path)
+        # Telegram Bot API has a 50MB limit for files sent via bot.send_document
+        # For larger files, users typically need to use a custom bot API server or upload to a cloud storage.
+        if file_size > 50 * 1024 * 1024: # 50 MB limit
+            await update.message.reply_text(
+                f"⚠️ File terlalu besar ({file_size / (1024*1024):.2f} MB). Telegram Bot API memiliki batas 50MB untuk unggahan file. "
+                "Anda dapat mengunggahnya secara manual atau menggunakan bot dengan Local Bot API yang dikonfigurasi untuk file besar."
+            )
+            return
+
         await update.message.reply_text("Sedang mengunggah file ke Telegram, mohon tunggu...")
-        await update.message.reply_document(document=open(file_path, 'rb'))
-        await update.message.reply_text("File berhasil diunggah. Menghapus file lokal...")
-        recorder.delete_recording_file(file_path)
-        recorder.clear_recording_info(chat_id)
-        await update.message.reply_text("File lokal berhasil dihapus.")
+        try:
+            await update.message.reply_document(document=open(file_path, 'rb'))
+            await update.message.reply_text("File berhasil diunggah. Menghapus file lokal...")
+            recorder.delete_recording_file(file_path)
+            recorder.clear_recording_info(chat_id)
+            await update.message.reply_text("File lokal berhasil dihapus.")
+        except Exception as e:
+            logger.error(f"Gagal mengunggah file {file_path}: {e}")
+            await update.message.reply_text(f"❌ Gagal mengunggah file: {e}. Pastikan ukuran file tidak melebihi batas Telegram atau coba lagi nanti.")
     except Exception as e:
         logger.error(f"Gagal mengunggah file {file_path}: {e}")
         await update.message.reply_text(f"Gagal mengunggah file: {e}")

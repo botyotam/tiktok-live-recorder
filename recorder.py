@@ -30,6 +30,7 @@ class TikTokRecorder:
                 "--user-agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
                 "--cookies", "cookies.txt",
                 "--simulate",
+                "--impersonate", "chrome", # Add impersonate flag
                 f"https://www.tiktok.com/@{username}/live"
             ]
             try:
@@ -45,36 +46,28 @@ class TikTokRecorder:
                 logger.error(f"Error checking live status for {username} with cookies.txt: {e}")
 
         # Priority 2: Try different browser cookies if one fails
-        browsers = ["chrome", "chromium", "firefox", "edge"]
-        
-        for browser in browsers:
-            command = [
-                "yt-dlp",
-                "--quiet", "--no-warnings",
-                "--user-agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-                "--cookies-from-browser", browser,
-                "--simulate",
-                f"https://www.tiktok.com/@{username}/live"
-            ]
-            try:
-                process = await asyncio.create_subprocess_exec(
-                    *command,
-                    stdout=asyncio.subprocess.PIPE,
-                    stderr=asyncio.subprocess.PIPE
-                )
-                stdout, stderr = await process.communicate()
-                if process.returncode == 0:
-                    return True
-                
-                err_msg = stderr.decode().lower()
-                if "could not find" in err_msg and "cookies database" in err_msg:
-                    continue # Try next browser
-                
-                # If it's a TikTok specific error, we might want to return False
-                # but let's try other browsers just in case one has the session
-            except Exception as e:
-                logger.error(f"Error checking live status for {username} with {browser}: {e}")
-                continue
+        # Priority 2: Try a default browser if cookies.txt not found
+        # Optimized: Only try 'chrome' by default for efficiency
+        command = [
+            "yt-dlp",
+            "--quiet", "--no-warnings",
+            "--user-agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "--cookies-from-browser", "chrome",
+            "--simulate",
+            "--impersonate", "chrome", # Add impersonate flag
+            f"https://www.tiktok.com/@{username}/live"
+        ]
+        try:
+            process = await asyncio.create_subprocess_exec(
+                *command,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE
+            )
+            stdout, stderr = await process.communicate()
+            if process.returncode == 0:
+                return True
+        except Exception as e:
+            logger.error(f"Error checking live status for {username} with chrome browser: {e}")
         
         # Fallback to no cookies if all browsers fail or are missing
         command = [
@@ -120,26 +113,18 @@ class TikTokRecorder:
             "--hls-use-mpegts",
             "--no-check-certificates",
             "--concurrent-fragments", "5",
-            "--wait-for-video", "60" # Wait up to 60s if live is just starting
+            "--wait-for-video", "60", # Wait up to 60s if live is just starting
+            "--impersonate", "chrome", # Add impersonate flag for recording
+            "--ffmpeg-args", "-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5", # Add ffmpeg reconnect arguments
+
         ]
 
         # Add cookie source
         if os.path.exists("cookies.txt"):
             command.extend(["--cookies", "cookies.txt"])
         else:
-            # Try to find a working browser for cookies
-            working_browser = "chrome" # Default
-            for browser in ["chrome", "chromium", "firefox", "edge"]:
-                test_cmd = ["yt-dlp", "--cookies-from-browser", browser, "--version"]
-                try:
-                    p = await asyncio.create_subprocess_exec(*test_cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
-                    _, stderr = await p.communicate()
-                    if "could not find" not in stderr.decode().lower():
-                        working_browser = browser
-                        break
-                except:
-                    continue
-            command.extend(["--cookies-from-browser", working_browser])
+            # Use chrome as default browser for cookies if cookies.txt not found
+            command.extend(["--cookies-from-browser", "chrome"]) # Optimized: Use chrome directly
 
         command.append(f"https://www.tiktok.com/@{username}/live")
 
