@@ -6,7 +6,9 @@ import re
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters
 
-from config import TELEGRAM_BOT_TOKEN, AUTHORIZED_USER_ID, RECORDINGS_DIR
+from config import TELEGRAM_BOT_TOKEN, AUTHORIZED_USER_ID, RECORDINGS_DIR, API_ID, API_HASH, SESSION_STRING, CHANNEL_ID
+from telethon.sync import TelegramClient
+from telethon.sessions import StringSession
 from recorder import TikTokRecorder
 
 # Enable logging
@@ -16,6 +18,9 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 recorder = TikTokRecorder()
+
+# Inisialisasi Telethon Client
+telethon_client = TelegramClient(StringSession(SESSION_STRING), API_ID, API_HASH)
 
 # Decorator for authorized users only
 def authorized_only(func):
@@ -79,23 +84,21 @@ async def save_command(update: Update, context):
         file_size = os.path.getsize(file_path)
         # Telegram Bot API has a 50MB limit for files sent via bot.send_document
         # For larger files, users typically need to use a custom bot API server or upload to a cloud storage.
-        if file_size > 50 * 1024 * 1024: # 50 MB limit
-            await update.message.reply_text(
-                f"⚠️ File terlalu besar ({file_size / (1024*1024):.2f} MB). Telegram Bot API memiliki batas 50MB untuk unggahan file. "
-                "Anda dapat mengunggahnya secara manual atau menggunakan bot dengan Local Bot API yang dikonfigurasi untuk file besar."
-            )
-            return
-
-        await update.message.reply_text("Sedang mengunggah file ke Telegram, mohon tunggu...")
+        await update.message.reply_text("Sedang mengunggah file ke Telegram (via Telethon), mohon tunggu...")
         try:
-            await update.message.reply_document(document=open(file_path, 'rb'))
-            await update.message.reply_text("File berhasil diunggah. Menghapus file lokal...")
+            await telethon_client.start()
+            await telethon_client.send_file(CHANNEL_ID, file_path, caption=f"Rekaman TikTok dari @{recorder.active_recordings[chat_id]['username']}")
+            await telethon_client.disconnect()
+            await update.message.reply_text("File berhasil diunggah ke channel. Menghapus file lokal...")
             recorder.delete_recording_file(file_path)
             recorder.clear_recording_info(chat_id)
             await update.message.reply_text("File lokal berhasil dihapus.")
         except Exception as e:
-            logger.error(f"Gagal mengunggah file {file_path}: {e}")
-            await update.message.reply_text(f"❌ Gagal mengunggah file: {e}. Pastikan ukuran file tidak melebihi batas Telegram atau coba lagi nanti.")
+            logger.error(f"Gagal mengunggah file {file_path} via Telethon: {e}")
+            await update.message.reply_text(f"❌ Gagal mengunggah file via Telethon: {e}. Pastikan SESSION_STRING dan CHANNEL_ID sudah benar, atau coba lagi nanti.")
+        finally:
+            if telethon_client.is_connected():
+                await telethon_client.disconnect()
     except Exception as e:
         logger.error(f"Gagal mengunggah file {file_path}: {e}")
         await update.message.reply_text(f"Gagal mengunggah file: {e}")
